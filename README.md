@@ -4,7 +4,7 @@
 A template repository for the Stasiewicz lab to use in creating new GitHub repositories, adapted from [aifs-github-best-practices](https://github.com/AI-Institute-Food-Systems/aifs-github-best-practices).
 
 ## Usage
-### Setup
+## Setup
 Mention the environment the code was run on during development and testing as well as any dependencies that are needed.
 
 ### Running
