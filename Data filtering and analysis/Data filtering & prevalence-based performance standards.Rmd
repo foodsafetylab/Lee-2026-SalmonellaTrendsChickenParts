@@ -1,0 +1,329 @@
+---
+title: "Data filtering & prevalence-based performance standards"
+output: html_document
+date: "2026-02-08"
+---
+
+```{r setup, include=FALSE}
+library(anytime)
+library(tidyverse)
+library(dplyr)
+library(openxlsx)
+```
+
+```{r}
+## pull up data files
+fy23 <- read.csv("fy23.csv", header=TRUE)
+fy24 <- read.csv("fy24.csv", header=TRUE)
+fy25 <- read.csv("fy25.csv", header=TRUE)
+
+## combine data files into one "data" dataframe
+data <- rbind(fy23, fy24)
+data <- rbind(data, fy25)
+
+##convert dates to YYYY-MM-DD format
+##select data from 2023-01-01 to 2025-09-30 (24-month timeframe)
+data$collection_date <- anydate(data$collection_date)
+data <- subset(data, data$collection_date > "2022-12-31" & data$collection_date < "2025-10-01")
+
+##select data from chicken parts project only
+data <- subset(data, data$project_code == "HC_CPT_LBW01")
+
+## exclude samples with no data result
+data <- subset(data, data$salmonella_sp_analysis!="NULL")
+
+## exclude product_type==NULL
+data <- subset(data, data$product_type!="NULL")
+
+## exclude samples from pilot plant establishments
+data <- subset(data, data$establishment_number!="P20604+V20604")
+data <- subset(data, data$establishment_number!="P1201")
+data <- subset(data, data$establishment_number!="P1304B+V1304B")
+data <- subset(data, data$establishment_number!="P1304A+V1304A")
+
+##save all the establishment IDs in a separate vector
+establishment_ids <- sort(unique(data$establishment_id))
+
+##pull up MPI directory csv
+establishment_size_data<-read.csv("MPI_Directory_by_Establishment_Number.csv", header=TRUE)
+
+##select for establishments that are present in our establishment_ids vector
+establishment_size_data<-filter(establishment_size_data, establishment_size_data$establishment_id %in% data$establishment_id)
+
+##grab establishment information
+data$establishment_size=NA
+data$establishment_zip=NA
+data$latitude=NA
+data$longitude=NA
+
+for (i in 1:length(establishment_ids)) {
+  row = establishment_size_data[which(establishment_size_data$establishment_id==establishment_ids[i], arr.ind=TRUE)[1],]
+  data$establishment_size[data$establishment_id==establishment_ids[i]]<-row$size
+  data$establishment_zip[data$establishment_id==establishment_ids[i]]<-row$zip
+  data$latitude[data$establishment_id==establishment_ids[i]]<-row$latitude
+  data$longitude[data$establishment_id==establishment_ids[i]]<-row$longitude
+}
+
+#exclude samples without establishment size information
+data<-subset(data, !is.na(data$establishment_size))
+data<-subset(data, data$establishment_size!="N / A")
+
+##change screening result of Negative samples with an enumeration value to "Positive"
+data$salmonella_sp_analysis[data$salmonella_sp_analysis=="Negative" & data$salmonella_quantitative_cfu_ml=="<10"]<-"Positive"
+
+data<-select(data, form_id, establishment_id, establishment_number, establishment_name, establishment_size, establishment_state, project_code, collection_date, sample_source_name, product_type, salmonella_sp_analysis, salmonella_quantitative_cfu_ml, establishment_zip, latitude, longitude)
+
+##convert all the "NULL"s to NA (R can intrinsically recognize NA)
+data$salmonella_quantitative_cfu_ml[which(data$salmonella_quantitative_cfu_ml == "NULL")] <- NA
+
+write.csv(data, "poultryparts_38968.csv")
+
+##positive samples with no enumeration result dropped from dataset
+data <- subset(data, !(salmonella_sp_analysis == "Positive" & is.na(salmonella_quantitative_cfu_ml)))
+```
+
+```{r}
+##read in serotypes data files
+fy23_serotypes <- read.csv("fy23 serotypes.csv", header=TRUE)
+fy24_serotypes <- read.csv("fy24 serotypes.csv", header=TRUE)
+fy25_serotypes <- read.csv("fy25 serotypes.csv", header=TRUE)
+
+## combine serotype data files into one "serotypes" dataframe
+serotypes <- rbind(fy23_serotypes, fy24_serotypes)
+serotypes <- rbind(serotypes, fy25_serotypes)
+
+##pull form ids (sample ids)
+salmonella_positive_ids <- data %>%
+  filter(salmonella_sp_analysis == "Positive") %>%
+  pull(form_id)
+
+##subset salmonella data
+serotypes_matched <- serotypes %>%
+  filter(grepl("SALM", pathogen_number)) %>%
+  filter(form_id %in% salmonella_positive_ids)
+
+unique_form_id<-unique(serotypes_matched$form_id)
+
+serotypes_wide <- serotypes_matched %>%
+  group_by(form_id) %>%
+  mutate(isolate_n = row_number()) %>%
+  filter(isolate_n <= 2) %>%
+  pivot_wider(
+    id_cols = form_id,
+    names_from = isolate_n,
+    values_from = salmonella_serotype,
+    names_prefix = "salmonella_serotype"
+  )
+
+#join to data
+data <- data %>%
+  mutate(form_id = trimws(as.character(form_id))) %>%
+  left_join(
+    serotypes_wide %>%
+      mutate(form_id = trimws(as.character(form_id))) %>%
+      select(form_id, salmonella_serotype1),
+    by = "form_id"
+  ) %>%
+  mutate(
+    salmonella_serotype1 = case_when(
+      salmonella_sp_analysis == "Positive" & is.na(salmonella_serotype1) ~ "No serotype data available",
+      salmonella_sp_analysis == "Positive" & salmonella_serotype1 == "Final result - characterization not available" ~ "No serotype data available",
+      salmonella_sp_analysis == "Negative" ~ NA_character_,
+      TRUE ~ salmonella_serotype1
+    )
+  )
+
+write.csv(data, "poultryparts_38682.csv")
+```
+
+```{r}
+#dataframe - PREVALENCE
+fiftytwo_results_prevalence<-data.frame(
+  establishment_id=integer(),
+  rolling_window=character(), 
+  start_date=character(), 
+  end_date=character(), 
+  n_pos=integer(),
+  n_pos_adj=integer(),
+  percent_pos=integer(),
+  percent_pos_adj=numeric(),
+  n_neg=integer(),
+  percent_neg=numeric(),
+  total_sample_no = integer(),
+  n_pos_breast = integer(),
+  n_neg_breast = integer(),
+  n_pos_leg = integer(),
+  n_neg_leg = integer(),
+  n_pos_wing = integer(),
+  n_neg_wing = integer(),
+  rw_category = character(),
+  establishment_size=character()
+  )
+```
+
+```{r}
+## PREVALENCE BASED STANDARDS
+
+## SKIP WINDOWS WITH LESS THAN 10 SAMPLES
+
+data<-read.csv("poultryparts_38968.csv", header=TRUE)
+data$collection_date <- as.Date(data$collection_date)
+
+##low sample size adjustment
+##subtract 1 from number of positives if total sample number is <52
+for (j in 1:length(establishment_ids)) {
+  
+  fiftytwo_start<-as.Date("2023-01-01")
+  fiftytwo_end<-fiftytwo_start+days(363)
+  fiftytwo_interval<-interval(fiftytwo_start, fiftytwo_end)
+  
+  for (i in 1:92) {
+    
+    if (fiftytwo_end > as.Date("2025-09-30")) {
+      break }
+    
+    if (sum(data$collection_date %within% fiftytwo_interval & data$establishment_id==establishment_ids[j]) < 10) {
+    
+      fiftytwo_start<-fiftytwo_start+days(7)
+      fiftytwo_end<-fiftytwo_end+days(7)
+      fiftytwo_interval<-interval(fiftytwo_start, fiftytwo_end)
+      
+      next }
+        
+        new_results <- data.frame(
+          ##specify start and end dates in the table
+          rolling_window = as.character(i),
+          start_date = as.character(fiftytwo_start),
+          end_date = as.character(fiftytwo_end),
+          
+          ##sum number of PASS, little m, and big M within the proposed interval
+          n_pos = sum(data$salmonella_sp_analysis=="Positive" & data$collection_date %within% fiftytwo_interval &
+                        data$establishment_id==establishment_ids[j]),
+          n_neg = sum(data$salmonella_sp_analysis=="Negative" & data$collection_date %within% fiftytwo_interval &
+                        data$establishment_id==establishment_ids[j]),
+          n_pos_breast = sum(data$salmonella_sp_analysis=="Positive" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Breast"),
+          n_pos_leg = sum(data$salmonella_sp_analysis=="Positive" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Leg"),
+          n_pos_wing = sum(data$salmonella_sp_analysis=="Positive" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Wing"),
+          n_neg_breast = sum(data$salmonella_sp_analysis=="Negative" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Breast"),
+          n_neg_leg = sum(data$salmonella_sp_analysis=="Negative" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Leg"),
+          n_neg_wing = sum(data$salmonella_sp_analysis=="Negative" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Wing"),
+          establishment_id = establishment_ids[j],
+          stringsAsFactors = FALSE
+      ) 
+      
+      new_results$total_sample_no = sum(new_results$n_pos, new_results$n_neg)
+      
+      new_results$n_pos_adj = ifelse(new_results$total_sample_no < 52 & new_results$n_pos > 0,
+                                     new_results$n_pos - 1, new_results$n_pos)
+      new_results$percent_pos = (new_results$n_pos / new_results$total_sample_no) * 100
+      new_results$percent_pos_adj = (new_results$n_pos_adj / new_results$total_sample_no) * 100
+      new_results$percent_neg = (new_results$n_neg / new_results$total_sample_no) * 100
+      new_results$rw_category = ifelse(new_results$percent_pos_adj > 15.4, "3",
+                                ifelse(new_results$percent_pos_adj > 7.7 &
+                                       new_results$percent_pos_adj <= 15.4, "2",
+                                ifelse(new_results$percent_pos_adj <= 7.7, "1", "")))
+      
+      row = data[which(data$establishment_id==establishment_ids[j], arr.ind=TRUE)[1],]
+      new_results$establishment_size=row$establishment_size
+
+      ##combine the new results with the all_results table
+      fiftytwo_results_prevalence <- bind_rows(fiftytwo_results_prevalence, new_results)
+    
+    fiftytwo_start<-fiftytwo_start+days(7)
+    fiftytwo_end<-fiftytwo_end+days(7)
+    fiftytwo_interval<-interval(fiftytwo_start, fiftytwo_end)
+      
+    }
+}
+
+write.csv(fiftytwo_results_prevalence, "prevalencebasedresults_withoutNAcategory.csv")
+```
+
+```{r}
+## NO SKIPPING WINDOWS WITH LESS THAN 10 SAMPLES
+
+data<-read.csv("poultryparts_38968.csv", header=TRUE)
+data$collection_date <- as.Date(data$collection_date)
+
+## include windows that have less than 10 samples, just categorize as NA
+
+for (j in 1:length(establishment_ids)) {
+  
+  fiftytwo_start<-as.Date("2023-01-01")
+  fiftytwo_end<-fiftytwo_start+days(363)
+  fiftytwo_interval<-interval(fiftytwo_start, fiftytwo_end)
+  
+  for (i in 1:100) {
+    
+    if (fiftytwo_end > as.Date("2025-09-30")) {
+      break }
+    
+    if (sum(data$collection_date %within% fiftytwo_interval & data$establishment_id==establishment_ids[j]) == 0) {
+    
+      fiftytwo_start<-fiftytwo_start+days(7)
+      fiftytwo_end<-fiftytwo_end+days(7)
+      fiftytwo_interval<-interval(fiftytwo_start, fiftytwo_end)
+      
+      next }
+        
+        new_results <- data.frame(
+          ##specify start and end dates in the table
+          rolling_window = as.character(i),
+          start_date = as.character(fiftytwo_start),
+          end_date = as.character(fiftytwo_end),
+          
+          ##sum number of PASS, little m, and big M within the proposed interval
+          n_pos = sum(data$salmonella_sp_analysis=="Positive" & data$collection_date %within% fiftytwo_interval &
+                        data$establishment_id==establishment_ids[j]),
+          n_neg = sum(data$salmonella_sp_analysis=="Negative" & data$collection_date %within% fiftytwo_interval &
+                        data$establishment_id==establishment_ids[j]),
+          n_pos_breast = sum(data$salmonella_sp_analysis=="Positive" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Breast"),
+          n_pos_leg = sum(data$salmonella_sp_analysis=="Positive" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Leg"),
+          n_pos_wing = sum(data$salmonella_sp_analysis=="Positive" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Wing"),
+          n_neg_breast = sum(data$salmonella_sp_analysis=="Negative" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Breast"),
+          n_neg_leg = sum(data$salmonella_sp_analysis=="Negative" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Leg"),
+          n_neg_wing = sum(data$salmonella_sp_analysis=="Negative" & data$collection_date %within% fiftytwo_interval
+                                  & data$establishment_id == establishment_ids[j] & data$product_type=="Wing"),
+          establishment_id = establishment_ids[j],
+          stringsAsFactors = FALSE
+      ) 
+      
+      new_results$total_sample_no = sum(new_results$n_pos, new_results$n_neg)
+      
+      new_results$n_pos_adj = ifelse(new_results$total_sample_no < 52 & new_results$n_pos > 0,
+                                     new_results$n_pos - 1, new_results$n_pos)
+      new_results$percent_pos = (new_results$n_pos / new_results$total_sample_no) * 100
+      new_results$percent_pos_adj = (new_results$n_pos_adj / new_results$total_sample_no) * 100
+      new_results$percent_neg = (new_results$n_neg / new_results$total_sample_no) * 100
+      new_results$rw_category = ifelse(new_results$total_sample_no < 10 & new_results$total_sample_no > 0 & new_results$n_pos <= 8, NA,
+                                ifelse(new_results$percent_pos_adj > 15.4, "3",
+                                ifelse(new_results$percent_pos_adj > 7.7 &
+                                       new_results$percent_pos_adj <= 15.4, "2",
+                                ifelse(new_results$percent_pos_adj <= 7.7, "1", ""))))
+      
+      row = data[which(data$establishment_id==establishment_ids[j], arr.ind=TRUE)[1],]
+      new_results$establishment_size=row$establishment_size
+
+      ##combine the new results with the all_results table
+      fiftytwo_results_prevalence <- bind_rows(fiftytwo_results_prevalence, new_results)
+    
+    fiftytwo_start<-fiftytwo_start+days(7)
+    fiftytwo_end<-fiftytwo_end+days(7)
+    fiftytwo_interval<-interval(fiftytwo_start, fiftytwo_end)
+      
+    }
+}
+
+write.csv(fiftytwo_results_prevalence, "prevalencebasedresults_withNAcategory.csv")
+```
