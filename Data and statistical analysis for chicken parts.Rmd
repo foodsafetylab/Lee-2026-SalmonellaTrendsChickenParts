@@ -1,0 +1,714 @@
+---
+title: "Data and statistical analysis for chicken parts"
+output: html_document
+date: "2026-02-22"
+---
+
+```{r setup, include=FALSE}
+library(anytime)
+library(tidyverse)
+library(dplyr)
+library(tidymodels)
+library(readxl)
+library(lubridate)
+```
+
+```{r}
+# logistic reg for prevalence, establishment size and product type as variables
+#prep work
+poultryparts_data <- read.csv("poultry_parts_data_with_serotypes.csv", header=TRUE) %>%
+  mutate(
+    screening          = ifelse(salmonella_sp_analysis == "Positive", 1, 0),
+    establishment_size  = factor(establishment_size,
+                                 levels = c("Large","Small","Very Small")),
+    product_type        = factor(product_type)
+  )
+
+#assign reference variables just to make sure
+poultryparts_data$establishment_size  <- relevel(poultryparts_data$establishment_size,  ref = "Large")
+poultryparts_data$product_type        <- relevel(poultryparts_data$product_type,        ref = "Leg")
+
+#size
+m_size_prevalence <- glm(screening ~ establishment_size,  data = poultryparts_data, family = binomial)
+
+#product type
+m_prodtype_prevalence <- glm(screening ~ product_type,        data = poultryparts_data, family = binomial)
+
+#results
+lapply(list(m_size_prevalence, m_prodtype_prevalence), function(m) {
+  exp(cbind(OR = coef(m), confint(m)))
+})
+
+m_size_prevalence_or_table <- data.frame(
+  OR    = round(exp(coef(m_size_prevalence)), 2),
+  SE    = round(summary(m_size_prevalence)$coefficients[, 2], 2),
+  CI_lo = round(exp(confint.default(m_size_prevalence)[, 1]), 2),
+  CI_hi = round(exp(confint.default(m_size_prevalence)[, 2]), 2),
+  p     = round(summary(m_size_prevalence)$coefficients[, 4], 6)
+)
+
+m_prodtype_prevalence_or_table <- data.frame(
+  OR    = round(exp(coef(m_prodtype_prevalence)), 2),
+  SE    = round(summary(m_prodtype_prevalence)$coefficients[, 2], 2), 
+  CI_lo = round(exp(confint.default(m_prodtype_prevalence)[, 1]), 2), 
+  CI_hi = round(exp(confint.default(m_prodtype_prevalence)[, 2]), 2), 
+  p     = round(summary(m_prodtype_prevalence)$coefficients[, 4], 6)
+)
+
+print(m_size_prevalence_or_table)
+print(m_prodtype_prevalence_or_table)
+
+log_reg_prevalence_individual_variables <- bind_rows(
+  m_size_prevalence_or_table,
+  m_prodtype_prevalence_or_table,
+) 
+print(log_reg_prevalence_individual_variables)
+```
+
+```{r}
+# logistic reg for level, establishment size, product type, and month as variables
+#prep work
+pos_data <- read.csv("poultryparts_38682.csv", header=TRUE) %>%
+  mutate(
+    collection_date = as.Date(collection_date),
+
+    # define high-level contamination
+    high_contamination = case_when(
+      salmonella_sp_analysis == "Negative" ~ 0,
+      salmonella_quantitative_cfu_ml == "<10" ~ 0,
+      !is.na(suppressWarnings(as.numeric(salmonella_quantitative_cfu_ml))) &
+        suppressWarnings(as.numeric(salmonella_quantitative_cfu_ml)) >= 10 ~ 1,
+      TRUE ~ 0  
+    ),
+    
+    month = factor(month(collection_date, label = TRUE, abbr = FALSE),
+                   levels = c("January","February","March","April","May","June",
+                              "July","August","September","October","November","December"), 
+                   ordered = FALSE),
+    establishment_size = factor(establishment_size, levels = c("Large","Small","Very Small")),
+    product_type = factor(product_type, levels = c("Breast","Leg","Wing"))
+  )
+
+#assign reference variables
+pos_data$establishment_size <- relevel(pos_data$establishment_size, ref = "Very Small")
+pos_data$product_type       <- relevel(pos_data$product_type,       ref = "Leg")
+pos_data$month              <- relevel(pos_data$month,              ref = "June")
+
+#run log reg
+m_size_level  <- glm(high_contamination ~ establishment_size, data = pos_data, family = binomial)
+m_prod_level  <- glm(high_contamination ~ product_type,       data = pos_data, family = binomial)
+m_month_level <- glm(high_contamination ~ month,              data = pos_data, family = binomial)
+
+#results
+get_or_table <- function(model) {
+  res <- summary(model)$coefficients
+  ci  <- confint.default(model)
+  
+  data.frame(
+    OR    = round(exp(res[, 1]), 2),
+    CI_lo = round(exp(ci[, 1]), 2),
+    CI_hi = round(exp(ci[, 2]), 2),
+    p     = round(res[, 4], 5),
+    Exact_p = res[, 4]
+  )[-1, ] 
+}
+
+log_reg_level_individual_variables <- bind_rows(
+  get_or_table(m_size_level),
+  get_or_table(m_prod_level),
+  get_or_table(m_month_level)
+)
+
+print(log_reg_level_individual_variables)
+```
+
+```{r}
+#logistic reg for level, for positive samples ONLY
+pos_data <- read.csv("poultryparts_38682.csv", header=TRUE) %>%
+  filter(salmonella_sp_analysis == "Positive") %>%
+  mutate(
+    #high contamination (>=10), 0 = low (<10)
+    high_contamination = case_when(
+      salmonella_quantitative_cfu_ml == "<10" ~ 0,
+      !is.na(suppressWarnings(as.numeric(salmonella_quantitative_cfu_ml))) &
+        suppressWarnings(as.numeric(salmonella_quantitative_cfu_ml)) >= 10 ~ 1,
+      TRUE ~ NA_real_
+    ),
+    month              = factor(month(collection_date, label = TRUE, abbr = FALSE),
+                                levels = c("January","February","March","April","May","June",
+                                           "July","August","September","October","November","December"), ordered = FALSE),
+    establishment_size  = factor(establishment_size,  levels = c("Large","Small","Very Small")),
+    product_type        = factor(product_type,        levels = c("Breast","Leg","Wing")),
+  ) %>%
+  drop_na(high_contamination)
+
+pos_data$establishment_size  <- relevel(pos_data$establishment_size,  ref = "Large")
+pos_data$product_type        <- relevel(pos_data$product_type,        ref = "Leg")
+pos_data$month               <- relevel(pos_data$month,               ref = "June")
+
+m_size_level <- glm(high_contamination ~ establishment_size,  data = pos_data, family = binomial)
+
+m_prodtype_level <- glm(high_contamination ~ product_type,        data = pos_data, family = binomial)
+
+m_month_level <- glm(high_contamination ~ month,               data = pos_data, family = binomial)
+
+#results
+lapply(list(m_size_level, m_prodtype_level, m_month_level), function(m) {
+  exp(cbind(OR = coef(m), confint(m)))
+})
+
+m_size_level_or_table <- data.frame(
+  OR    = round(exp(coef(m_size_level)), 2),
+  SE    = round(summary(m_size_level)$coefficients[, 2], 2),
+  CI_lo = round(exp(confint.default(m_size_level)[, 1]), 2),
+  CI_hi = round(exp(confint.default(m_size_level)[, 2]), 2),
+  p     = round(summary(m_size_level)$coefficients[, 4], 6)
+)
+
+m_prodtype_level_or_table <- data.frame(
+  OR    = round(exp(coef(m_prodtype_level)), 2),
+  SE    = round(summary(m_prodtype_level)$coefficients[, 2], 2), 
+  CI_lo = round(exp(confint.default(m_prodtype_level)[, 1]), 2), 
+  CI_hi = round(exp(confint.default(m_prodtype_level)[, 2]), 2), 
+  p     = round(summary(m_prodtype_level)$coefficients[, 4], 6)
+)
+
+m_month_level_or_table <- data.frame(
+  OR    = round(exp(coef(m_month_level)), 2), 
+  SE    = round(summary(m_month_level)$coefficients[, 2], 2), 
+  CI_lo = round(exp(confint.default(m_month_level)[, 1]), 2), 
+  CI_hi = round(exp(confint.default(m_month_level)[, 2]), 2), 
+  p     = round(summary(m_month_level)$coefficients[, 4], 6)
+)
+
+print(m_size_level_or_table)
+print(m_prodtype_level_or_table)
+print(m_month_level_or_table)
+
+log_reg_level_individual_variables <- bind_rows(
+  m_size_level_or_table,
+  m_prodtype_level_or_table,
+  m_month_level_or_table,
+) 
+
+print(log_reg_level_individual_variables)
+```
+
+```{r}
+#serotypes and levels analysis
+
+df <- read.csv("poultryparts_38682.csv", stringsAsFactors = FALSE)
+
+#define virulence classifications
+high_virulence <- c(
+  "Enteritidis",
+  "Typhimurium",
+  "Hadar",
+  "I 4,[5],12:i:-",
+  "Newport",
+  "Litchfield",
+  "Dublin",
+  "Muenchen"
+)
+
+low_virulence <- c(
+  "Infantis",
+  "Kentucky",
+  "Schwarzengrund",
+  "Alachua",
+  "Thompson",
+  "Braenderup",
+  "Heidelberg",
+  "Typhimurium - Possible Vaccine Strain",
+  "Anatum",
+  "Cerro",
+  "Johannesburg",
+  "Mbandaka",
+  "Senftenberg",
+  "Montevideo",
+  "Oranienburg",
+  "Uganda"
+)
+
+#serotypes w/o virulence data reported in risk assessment are excluded from statistical testing
+exclude_from_analysis <- c(
+  "I -:r:1,5",
+  "IIIa [1],13,23:g,z51:-",
+  "I 7:-:1,5",
+  "Barranquilla",
+  "Derby",
+  "Havana",
+  "Indiana",
+  "Liverpool",
+  "Orion",
+  "Widemarsh"
+)
+
+#positive samples w/o serotype data
+no_serotype_strings <- c(
+  "NA",
+  "",
+  "NULL",
+  "No serotype data available",                     
+  "Final result - characterization not available"
+)
+
+df_analysis <- df %>%
+  filter(salmonella_sp_analysis == "Positive") %>%
+  filter(
+    is.na(salmonella_serotype1) |
+      !(salmonella_serotype1 %in% exclude_from_analysis)
+  ) %>%
+  mutate(
+    #high-level vs. low-level Salmonella
+    high_level = case_when(
+      cfu_ml_category %in% c("10 <= x < 100",
+                              "100 <= x < 1000",
+                              "1000 <= x < 10000") ~ 1L,
+      cfu_ml_category == "<10"                      ~ 0L,
+      TRUE                                          ~ NA_integer_
+    ),
+    virulence_group = case_when(
+      salmonella_serotype1 %in% high_virulence                          ~ "High-virulence",
+      salmonella_serotype1 %in% low_virulence                           ~ "Low-virulence",
+      is.na(salmonella_serotype1) |
+        salmonella_serotype1 %in% no_serotype_strings                   ~ "No-Serotype",
+      TRUE                                                               ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(virulence_group), !is.na(high_level)) %>%
+  mutate(
+    virulence_group = factor(virulence_group,
+                             levels = c("Low-virulence", "High-virulence", "No-Serotype"))
+  )
+
+#summary table
+summary_tbl <- df_analysis %>%
+  group_by(virulence_group) %>%
+  summarise(
+    n_total  = n(),
+    n_low    = sum(high_level == 0),
+    n_high   = sum(high_level == 1),
+    pct_high = round(n_high / n_total * 100, 2),
+    .groups  = "drop"
+  )
+
+#contingency table
+contingency_3x2 <- df_analysis %>%
+  group_by(virulence_group) %>%
+  summarise(
+    `Low-level`  = sum(high_level == 0),
+    `High-level` = sum(high_level == 1),
+    .groups = "drop"
+  ) %>%
+  tibble::column_to_rownames("virulence_group") %>%
+  as.matrix()
+
+#Bonferroni-corrected alpha
+bonferroni_alpha <- 0.05 / 3
+
+#pairwise comparisons with Bonferroni correction
+pairs <- list(
+  c("High-virulence", "Low-virulence"),
+  c("High-virulence", "No-Serotype"),
+  c("Low-virulence",  "No-Serotype")
+)
+
+for (pair in pairs) {
+
+  grp1 <- pair[1]
+  grp2 <- pair[2]
+
+  tbl_pair <- contingency_3x2[c(grp1, grp2), ]
+
+  chisq_pair <- chisq.test(tbl_pair, correct = FALSE)
+
+  rate1 <- round(tbl_pair[grp1, "High-level"] / sum(tbl_pair[grp1, ]) * 100, 2)
+  rate2 <- round(tbl_pair[grp2, "High-level"] / sum(tbl_pair[grp2, ]) * 100, 2)
+
+  # One-sided p: divide two-sided p by 2 if observed direction matches
+  # (first group has higher proportion than second)
+  grp1_is_higher <- rate1 > rate2
+  p_one_sided    <- if (grp1_is_higher) chisq_pair$p.value / 2 else 1 - chisq_pair$p.value / 2
+
+  sig_label <- ifelse(chisq_pair$p.value < bonferroni_alpha,
+                      "*** Significant after Bonferroni correction",
+                      "ns  Not significant after Bonferroni correction")
+
+  cat(sprintf("\n--- %s vs. %s ---\n", grp1, grp2))
+  cat(sprintf("  High-level rate:  %s = %.2f%%,  %s = %.2f%%\n",
+              grp1, rate1, grp2, rate2))
+  cat(sprintf("  X2    = %.4f\n",  chisq_pair$statistic))
+  cat(sprintf("  df    = %d\n",    chisq_pair$parameter))
+  cat(sprintf("  p (two-sided, raw)        = %.6f\n", chisq_pair$p.value))
+  cat(sprintf("  p (two-sided, Bonferroni) = %.6f\n", min(chisq_pair$p.value * 3, 1)))
+  cat(sprintf("  p (one-sided, raw)        = %.6f  [%s > %s: %s]\n",
+              p_one_sided, grp1, grp2, grp1_is_higher))
+  cat(sprintf("  %s\n", sig_label))
+}
+
+cat("\n")
+
+#log reg for odds of high level contamination
+df_analysis <- df_analysis %>%
+  mutate(
+    virulence_group = relevel(virulence_group, ref = "No-Serotype")
+  )
+
+logit_model <- glm(
+  high_level ~ virulence_group,
+  data   = df_analysis,
+  family = binomial(link = "logit")
+)
+
+print(summary(logit_model))
+
+#log reg results
+or_table <- data.frame(
+  OR         = exp(coef(logit_model)),
+  CI_lower   = exp(confint(logit_model)[, 1]),
+  CI_upper   = exp(confint(logit_model)[, 2]),
+  p_value    = coef(summary(logit_model))[, 4]
+)
+
+or_table <- round(or_table, 4)
+print(or_table)
+
+cat("\n--- Formatted Output ---\n")
+for (i in 2:nrow(or_table)) {
+  cat(sprintf(
+    "  %-45s OR = %.3f  95%% CI [%.3f, %.3f]  p = %.6f\n",
+    rownames(or_table)[i],
+    or_table$OR[i],
+    or_table$CI_lower[i],
+    or_table$CI_upper[i],
+    or_table$p_value[i]
+  ))
+}
+
+```
+
+```{r}
+#linear regression for moving window categories, EXCLUDING NA windows
+df<- read.csv("prevalence based results_with EXCLUDE NA and NULL data/prevalencebasedresults_withoutNAcategory.csv")
+
+run_regression <- function(data, group_label) {
+  props <- data %>%
+    group_by(rolling_window) %>%
+    summarise(
+      prop1 = mean(rw_category == 1) * 100,
+      prop2 = mean(rw_category == 2) * 100,
+      prop3 = mean(rw_category == 3) * 100,
+      .groups = "drop"
+    ) %>%
+    arrange(rolling_window)
+
+  n              <- nrow(props)
+  weeks_per_year <- 52
+
+  results <- lapply(1:3, function(cat) {
+    y      <- props[[paste0("prop", cat)]]
+    fit    <- lm(y ~ rolling_window, data = props)
+    co     <- summary(fit)$coefficients
+
+    slope  <- co["rolling_window", "Estimate"]  * weeks_per_year
+    se     <- co["rolling_window", "Std. Error"] * weeks_per_year
+    t_stat <- co["rolling_window", "t value"]
+    p_val  <- co["rolling_window", "Pr(>|t|)"]
+    r2     <- summary(fit)$r.squared
+    t_crit <- qt(0.975, df = n - 2)
+    ci_lo  <- slope - t_crit * se
+    ci_hi  <- slope + t_crit * se
+
+    direction  <- ifelse(slope >= 0, "Increasing", "Decreasing")
+    p_label    <- ifelse(p_val < 0.001, "p < 0.001",
+                         paste0("p = ", sprintf("%.4f", p_val)))
+    trend_label <- paste0(direction, " ", abs(round(slope, 2)), " pp/year")
+    annotation  <- paste0(trend_label, " | 95% CI [",
+                          round(ci_lo, 2), ", ", round(ci_hi, 2), "] | ",
+                          p_label, " | R\u00b2=", round(r2, 4))
+
+    data.frame(
+      establishment_size   = group_label,
+      category             = paste0("Category ", cat),
+      yearly_change_pp     = round(slope, 2),
+      ci_lower_pp          = round(ci_lo, 2),
+      ci_upper_pp          = round(ci_hi, 2),
+      t_statistic          = round(t_stat, 2),
+      p_value              = p_label,
+      r_squared            = round(r2, 3),
+      trend_label          = trend_label,   # short: "Increasing 2.03 pp/year"
+      annotation           = annotation,    # full:  includes CI, p, R²
+      check.names = FALSE
+    )
+  })
+
+  do.call(rbind, results)
+}
+
+groups <- list(
+  list(label = "All Sizes",  size = NULL),
+  list(label = "Large",      size = "Large"),
+  list(label = "Small",      size = "Small"),
+  list(label = "Very Small", size = "Very Small")
+)
+
+results <- do.call(rbind, lapply(groups, function(g) {
+  sub <- if (is.null(g$size)) df else filter(df, establishment_size == g$size)
+  run_regression(sub, g$label)
+}))
+
+rownames(results) <- NULL
+print(results)
+```
+
+```{r}
+#linear regression , pp/year, INCLUDING NA windows
+data <- read.csv("prevalence based results_with EXCLUDE NA and NULL data/prevalencebasedresults_withNAcategory.csv")
+
+run_regression <- function(data, group_label) {
+  props <- data %>%
+    group_by(rolling_window) %>%
+    summarise(
+  n_total = n(),
+  prop1   = sum(rw_category == 1,  na.rm = TRUE) / n_total * 100,
+  prop2   = sum(rw_category == 2,  na.rm = TRUE) / n_total * 100,
+  prop3   = sum(rw_category == 3,  na.rm = TRUE) / n_total * 100,
+  propNA  = sum(is.na(rw_category))              / n_total * 100,
+  .groups = "drop"
+) %>%
+    arrange(rolling_window)
+
+  n              <- nrow(props)
+  weeks_per_year <- 52
+
+  results <- lapply(
+    list(list(num = 1, col = "prop1"),
+         list(num = 2, col = "prop2"),
+         list(num = 3, col = "prop3"),
+         list(num = "NA", col = "propNA")),
+    function(cat) {
+      y      <- props[[cat$col]]
+      fit    <- lm(y ~ rolling_window, data = props)
+      co     <- summary(fit)$coefficients
+      slope  <- co["rolling_window", "Estimate"]   * weeks_per_year
+      se     <- co["rolling_window", "Std. Error"]  * weeks_per_year
+      t_stat <- co["rolling_window", "t value"]
+      p_val  <- co["rolling_window", "Pr(>|t|)"]
+      r2     <- summary(fit)$r.squared
+      t_crit <- qt(0.975, df = n - 2)
+      ci_lo  <- slope - t_crit * se
+      ci_hi  <- slope + t_crit * se
+
+      direction   <- ifelse(slope >= 0, "Increasing", "Decreasing")
+      p_label     <- ifelse(p_val < 0.0001, "p < 0.0001",
+                            paste0("p = ", sprintf("%.4f", p_val)))
+      trend_label <- paste0(direction, " ", abs(round(slope, 2)), " pp/year")
+      annotation  <- paste0(trend_label, " | ",
+                            p_label, " | R\u00b2=", signif(r2, 2))
+
+      data.frame(
+        establishment_size = group_label,
+        category           = paste0("Category ", cat$num),
+        yearly_change_pp   = round(slope, 2),
+        ci_lower_pp        = round(ci_lo, 2),
+        ci_upper_pp        = round(ci_hi, 2),
+        t_statistic        = round(t_stat, 2),
+        p_value            = p_label,
+        r_squared          = signif(r2, 2),
+        trend_label        = trend_label,
+        annotation         = annotation,
+        check.names = FALSE
+      )
+    }
+  )
+  do.call(rbind, results)
+}
+
+groups <- list(
+  list(label = "All Sizes",  size = NULL),
+  list(label = "Large",      size = "Large"),
+  list(label = "Small",      size = "Small"),
+  list(label = "Very Small", size = "Very Small")
+)
+
+results <- do.call(rbind, lapply(groups, function(g) {
+  sub <- if (is.null(g$size)) data else filter(data, establishment_size == g$size)
+  run_regression(sub, g$label)
+}))
+
+rownames(results) <- NULL
+
+results <- results %>%
+  mutate(category = ifelse(category == "Category NA", "NA", category))
+
+print(results)
+```
+
+```{r}
+#overall and pairwise chi-square for aggregated mw categories, excluding NA windows
+
+categorization_chi <- read.csv("prevalence based results_with EXCLUDE NA and NULL data/prevalencebasedresults_withoutNAcategory.csv") %>%
+  filter(rw_category %in% c("1", "2", "3")) %>%
+  mutate(
+    establishment_size = factor(establishment_size,
+                                levels = c("Large", "Small", "Very Small")),
+    rw_category = factor(rw_category, levels = c("1", "2", "3"))
+  )
+
+ct <- table(categorization_chi$establishment_size, categorization_chi$rw_category)
+print(ct)
+
+#row proportions
+prop.table(ct, margin = 1) * 100
+
+#overall chi-square
+overall <- chisq.test(ct, correct = FALSE)
+print(overall)
+
+#standardized residuals
+(ct - overall$expected) / sqrt(overall$expected)
+
+#make pairs
+sizes      <- c("Large", "Small", "Very Small")
+size_pairs <- combn(sizes, 2, simplify = FALSE)
+
+#category distribution among sizes, paired chi (Bonferroni k=3 per pair)
+per_cat <- map_dfr(size_pairs, function(pair) {
+  map_dfr(c(1, 2, 3), function(cat) {
+    sub <- ct[pair, ]
+    tbl_2x2 <- cbind(sub[, as.character(cat)],
+                     rowSums(sub[, as.character(c(1,2,3)[c(1,2,3) != cat])]))
+    test  <- chisq.test(tbl_2x2, correct = FALSE)
+    p_bon <- min(test$p.value * 3, 1)
+    res   <- (tbl_2x2 - test$expected) / sqrt(test$expected)
+    tibble(
+      Comparison   = paste(pair, collapse = " vs "),
+      Category     = paste("Cat", cat),
+      n_1          = tbl_2x2[1, 1],
+      n_2          = tbl_2x2[2, 1],
+      chi2         = round(test$statistic, 4),
+      df           = test$parameter,
+      p_raw        = test$p.value,
+      p_bonf       = p_bon,
+      Std_Res_grp1 = round(res[1, 1], 3),
+      Std_Res_grp2 = round(res[2, 1], 3),
+      Sig          = case_when(p_bon < 0.001 ~ "***", p_bon < 0.01 ~ "**",
+                               p_bon < 0.05  ~ "*",   TRUE          ~ "ns")
+    )
+  })
+})
+print(per_cat)
+
+```
+
+```{r}
+#overall and pairwise chi-square for aggregated mw categories, including NA and including NA converted to categories
+run_pairwise <- function(ct, size_labels, cat_labels) {
+
+  pairs       <- combn(seq_along(size_labels), 2, simplify = FALSE)
+  k           <- length(pairs) * length(cat_labels)      
+  alpha_bonf  <- 0.05 / k
+
+  cat(sprintf("\nBonferroni correction: 0.05 / %d comparisons = %.4f\n",
+              k, alpha_bonf))
+
+  results <- do.call(rbind, lapply(seq_along(cat_labels), function(c_idx) {
+    do.call(rbind, lapply(pairs, function(pair) {
+
+      i <- pair[1]; j <- pair[2]
+
+      n1     <- ct[i, c_idx];  total1 <- sum(ct[i, ])
+      n2     <- ct[j, c_idx];  total2 <- sum(ct[j, ])
+      tbl_2x2 <- matrix(c(n1, total1 - n1,
+                           n2, total2 - n2), nrow = 2, byrow = TRUE)
+
+      ft     <- fisher.test(tbl_2x2, alternative = "two.sided")
+      pct1   <- round(n1 / total1 * 100, 1)
+      pct2   <- round(n2 / total2 * 100, 1)
+      p_val  <- ft$p.value
+      p_lab  <- ifelse(p_val < 0.0001, "p < 0.0001",
+                       paste0("p = ", sprintf("%.4f", p_val)))
+      sig    <- ifelse(p_val < alpha_bonf, "***", "ns")
+
+      data.frame(
+        category   = cat_labels[c_idx],
+        size_1     = size_labels[i],
+        size_2     = size_labels[j],
+        pct_size1  = pct1,
+        pct_size2  = pct2,
+        OR         = round(ft$estimate, 3),
+        p_value    = p_lab,
+        significant = sig,
+        stringsAsFactors = FALSE
+      )
+    }))
+  }))
+
+  rownames(results) <- NULL
+  results
+}
+
+#including NA windows
+data_na <- read.csv("prevalence based results_with EXCLUDE NA and NULL data/prevalencebasedresults_withNAcategory.csv",
+  stringsAsFactors = FALSE
+)
+
+data_na <- data_na %>%
+  mutate(cat_label = ifelse(is.na(rw_category), "NA",
+                            as.character(as.integer(rw_category))))
+
+size_levels <- c("Large", "Small", "Very Small")
+cat_levels_na <- c("1", "2", "3", "NA")
+
+ct_na <- table(
+  factor(data_na$establishment_size, levels = size_levels),
+  factor(data_na$cat_label,          levels = cat_levels_na)
+)
+
+cat("\nContingency Table (row = establishment size, col = category):\n")
+print(ct_na)
+cat("\nRow proportions (%):\n")
+print(round(prop.table(ct_na, margin = 1) * 100, 1))
+
+cat("\n--- Overall Chi-Square Test ---\n")
+chi_na <- chisq.test(ct_na, correct = FALSE)
+cat(sprintf("  X²  = %.2f\n",   chi_na$statistic))
+cat(sprintf("  df  = %d\n",     chi_na$parameter))
+cat(sprintf("  p   = %.2e\n\n", chi_na$p.value))
+
+cat("--- Pairwise Fisher's Exact Tests (Bonferroni-corrected) ---\n")
+pw_na <- run_pairwise(as.matrix(ct_na), size_levels, cat_levels_na)
+print(pw_na)
+
+
+#with NA windows converted into categories
+data_conv <- read.csv("prevalence based results_with EXCLUDE NA and NULL data/prevalencebasedresults_NAcatCONVERTED.csv",
+  stringsAsFactors = FALSE
+)
+
+data_conv <- data_conv %>%
+  mutate(cat_label = as.character(as.integer(rw_category)))
+
+cat_levels_conv <- c("1", "2", "3")
+
+ct_conv <- table(
+  factor(data_conv$establishment_size, levels = size_levels),
+  factor(data_conv$cat_label,          levels = cat_levels_conv)
+)
+
+cat("\nContingency Table (row = establishment size, col = category):\n")
+print(ct_conv)
+cat("\nRow proportions (%):\n")
+print(round(prop.table(ct_conv, margin = 1) * 100, 1))
+
+cat("\n--- Overall Chi-Square Test ---\n")
+chi_conv <- chisq.test(ct_conv, correct = FALSE)
+cat(sprintf("  X²  = %.2f\n",   chi_conv$statistic))
+cat(sprintf("  df  = %d\n",     chi_conv$parameter))
+cat(sprintf("  p   = %.2e\n\n", chi_conv$p.value))
+
+cat("--- Pairwise Fisher's Exact Tests (Bonferroni-corrected) ---\n")
+pw_conv <- run_pairwise(as.matrix(ct_conv), size_levels, cat_levels_conv)
+print(pw_conv)
+```
