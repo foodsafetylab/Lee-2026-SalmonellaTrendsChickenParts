@@ -1,4 +1,4 @@
-# the-template-repo
+# Lee-2026-SalmonellaTrendsChickenParts
 
 ## Overview
 A template repository for the Stasiewicz lab to use in creating new GitHub repositories, adapted from [aifs-github-best-practices](https://github.com/AI-Institute-Food-Systems/aifs-github-best-practices).
