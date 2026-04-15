@@ -1,11 +1,12 @@
 # Lee-2026-SalmonellaTrendsChickenParts
 
 ## Overview
-A template repository for the Stasiewicz lab to use in creating new GitHub repositories, adapted from [aifs-github-best-practices](https://github.com/AI-Institute-Food-Systems/aifs-github-best-practices).
+ABSTRACT
 
 ## Usage
 ## Setup
-Mention the environment the code was run on during development and testing as well as any dependencies that are needed.
+- Raw chicken parts laboratory sampling data was obtained from the USDA-FSIS Laboratory Sampling Data webpage here: https://www.fsis.usda.gov/news-events/publications/raw-poultry-sampling
+- The Meat, Poultry and Egg Product Inspection Directory file was obtained from USDA-FSIS Meat, Poultry and Egg Product Inspection Directory webpage here: https://www.fsis.usda.gov/inspection/establishments/meat-poultry-and-egg-product-inspection-directory
 
 ### Running
 Data filtering and prevalence-based categorization can be conducted by opening the Data filtering & prevalence-based performance standards.Rmd file. Statistical analysis of the filtered data and establishment categories can be conducted by opening the Statistical testing.Rmd file. Refer to the annotations for guidance on each step.
