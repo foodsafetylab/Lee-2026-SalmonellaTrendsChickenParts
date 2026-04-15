@@ -8,7 +8,7 @@ A template repository for the Stasiewicz lab to use in creating new GitHub repos
 Mention the environment the code was run on during development and testing as well as any dependencies that are needed.
 
 ### Running
-Explain in detailed steps how to run the code in order to reproduce the results shown above in the results section.
+Data filtering and prevalence-based categorization can be conducted by opening the Data filtering & prevalence-based performance standards.Rmd file. Statistical analysis of the filtered data and establishment categories can be conducted by opening the Statistical testing.Rmd file. Refer to the annotations for guidance on each step.
 
 ## Authors
 You can view the list of authors in the [AUTHORS](/AUTHORS) file.
@@ -28,8 +28,5 @@ Include citation here.
 ## License
 This project's code is licensed under the GNU General Public License v3.0 and dataset is licensed the Creative Commons Attribution Share Alike 4.0 International license. Please see the [LICENSE.code](/LICENSE.code) and [LICENSE.dataset](/LICENSE.dataset) files for details.
 
-## Acknowledgements
-Include acknowledgements relevant to the project here.
-
 ## Funding
-Include the source of project funding here.
+This project was made possible by the Doctoral Merit Fellowship, awarded to Jungeun Lee, from the Graduate College at University of Illinois Urbana-Champaign.
