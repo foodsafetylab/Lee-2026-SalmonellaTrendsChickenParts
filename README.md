@@ -29,5 +29,8 @@ Include citation here.
 ## License
 This project's code is licensed under the GNU General Public License v3.0 and dataset is licensed the Creative Commons Attribution Share Alike 4.0 International license. Please see the [LICENSE.code](/LICENSE.code) and [LICENSE.dataset](/LICENSE.dataset) files for details.
 
+## Acknowledgements
+Stasiewicz has received unrelated research funding from the US Poultry and Egg Association and Perdue Foods LLC.
+
 ## Funding
-This project was made possible by the Doctoral Merit Fellowship, awarded to Jungeun Lee, from the Graduate College at University of Illinois Urbana-Champaign.
+This study was supported by the Doctoral Merit Fellowship to Jungeun Lee, administered though the Department of Food Science and Human Nutrition at the University of Illinois Urbana-Champaign. 
